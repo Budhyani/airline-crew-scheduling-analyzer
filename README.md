@@ -146,14 +146,18 @@ If(Sum(ReassignmentCostINR) > 300000, RGB(226,75,74),
 
 ## Data Model
 
-Calendar ──── Flights ──── CrewAssignments ──── CrewMaster
-│
-┌─────┴──────┐
-ViolationSummary  WhatIfCancellationImpact
-│
-RestPeriods (via CrewID)
-MonthlyHours (via CrewID)
-ConsecutiveDutyCheck (via CrewID)
+```
+Calendar —— Flights —— CrewAssignments —— CrewMaster
+   |
+   |-------------------------------|
+   |                               |
+ViolationSummary        WhatIfCancellationImpact
+   |
+   |-------------------------------|
+   |              |               |
+RestPeriods   MonthlyHours   ConsecutiveDutyCheck
+(via CrewID)  (via CrewID)   (via CrewID)
+```
 
 **Tables:**
 
