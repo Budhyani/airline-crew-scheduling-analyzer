@@ -1,0 +1,313 @@
+// ============================================================
+// AIRLINE CREW SCHEDULING EFFICIENCY ANALYZER
+// Qlik Sense Desktop - FIXED Load Script v2
+// No synthetic keys | No circular references
+// ============================================================
+
+SET ThousandSep=',';
+SET DecimalSep='.';
+SET MoneyThousandSep=',';
+SET MoneyDecimalSep='.';
+SET MoneyFormat='₹#,##0.00;-₹#,##0.00';
+SET TimeFormat='hh:mm';
+SET DateFormat='YYYY-MM-DD';
+SET TimestampFormat='YYYY-MM-DD hh:mm';
+SET FirstWeekDay=0;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='en-IN';
+
+// ============================================================
+// SECTION 1: DGCA REGULATIONS
+// No shared fields with other tables - safe
+// ============================================================
+
+Regulations:
+LOAD
+    RegCode,
+    Description,
+    LimitValue,
+    Unit,
+    AppliesTo
+FROM [lib://CrewProject/dgca_regulations.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// ============================================================
+// SECTION 2: CREW MASTER
+// Key field: CrewID
+// Rename: Airline -> CrewAirline (avoids collision with Flights.Airline)
+// ============================================================
+
+CrewMaster:
+LOAD
+    CrewID,
+    CrewName,
+    Role,
+    QualifiedAircraft,
+    Airline AS CrewAirline,
+    BaseAirport,
+    Date(JoinDate, 'YYYY-MM-DD') AS JoinDate,
+    MaxMonthlyHours,
+    ContractType,
+    Round((Today() - Date#(JoinDate, 'YYYY-MM-DD')) / 365, 1) AS ExperienceYears
+FROM [lib://CrewProject/crew_master.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// ============================================================
+// SECTION 3: FLIGHTS
+// Key fields: FlightID, FlightDate
+// ============================================================
+
+Flights:
+LOAD
+    FlightID,
+    FlightNumber,
+    Airline,
+    Origin,
+    Destination,
+    Timestamp(ScheduledDep, 'YYYY-MM-DD hh:mm') AS ScheduledDep,
+    Timestamp(ScheduledArr, 'YYYY-MM-DD hh:mm') AS ScheduledArr,
+    If(Len(Trim(ActualDep)) > 0,
+        Timestamp(ActualDep, 'YYYY-MM-DD hh:mm'), Null()) AS ActualDep,
+    If(Len(Trim(ActualArr)) > 0,
+        Timestamp(ActualArr, 'YYYY-MM-DD hh:mm'), Null()) AS ActualArr,
+    AircraftType,
+    Status,
+    Num(DelayMinutes) AS DelayMinutes,
+    Num(FlightDurationMinutes) AS FlightDurationMinutes,
+    Date(Date#(Date, 'YYYY-MM-DD'), 'YYYY-MM-DD') AS FlightDate,
+    Round(FlightDurationMinutes / 60, 2) AS FlightDurationHours,
+    WeekDay(Date#(Date, 'YYYY-MM-DD')) AS DayOfWeek,
+    Month(Date#(Date, 'YYYY-MM-DD')) AS FlightMonth,
+    Week(Date#(Date, 'YYYY-MM-DD')) AS FlightWeek,
+    Hour(Timestamp(ScheduledDep, 'YYYY-MM-DD hh:mm')) AS DepartureHour,
+    If(Hour(Timestamp(ScheduledDep,'YYYY-MM-DD hh:mm')) >= 6
+        AND Hour(Timestamp(ScheduledDep,'YYYY-MM-DD hh:mm')) <= 9, 'Peak',
+       If(Hour(Timestamp(ScheduledDep,'YYYY-MM-DD hh:mm')) >= 17
+        AND Hour(Timestamp(ScheduledDep,'YYYY-MM-DD hh:mm')) <= 21, 'Peak', 'Off-Peak'))
+        AS PeakFlag,
+    If(Status = 'Cancelled', 1, 0) AS IsCancelled,
+    If(Status = 'Delayed', 1, 0) AS IsDelayed,
+    If(DelayMinutes = 0, 'No Delay',
+       If(DelayMinutes <= 30, 'Minor (1-30 min)',
+          If(DelayMinutes <= 60, 'Moderate (31-60 min)',
+             If(DelayMinutes <= 120, 'Major (61-120 min)',
+                'Critical (>120 min)')))) AS DelayCategory,
+    Origin & '-' & Destination AS Route
+FROM [lib://CrewProject/flights.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// ============================================================
+// SECTION 4: CREW ASSIGNMENTS
+// Key fields: AssignmentID (unique), FlightID, CrewID
+// Rename: Date -> AssignmentDate, Airline removed (get via FlightID->Flights)
+// ============================================================
+
+CrewAssignments:
+LOAD
+    AssignmentID,
+    FlightID,
+    CrewID,
+    CrewName        AS AssignedCrewName,
+    Role            AS AssignedRole,
+    Timestamp(ReportTime, 'YYYY-MM-DD hh:mm')  AS ReportTime,
+    Timestamp(ReleaseTime, 'YYYY-MM-DD hh:mm') AS ReleaseTime,
+    Num(DutyHours)  AS DutyHours,
+    IsReassignment,
+    OriginalCrewID,
+    ReassignmentReason,
+    QualificationMatch,
+    Date(Date#(Date, 'YYYY-MM-DD'), 'YYYY-MM-DD') AS AssignmentDate,
+
+    If(DutyHours > 14, 'VIOLATION', 'Compliant') AS DutyHourStatus,
+    If(DutyHours > 14, Round(DutyHours - 14, 2), 0) AS DutyExcessHours,
+
+    If(DutyHours <= 10, 'Normal (<=10h)',
+       If(DutyHours <= 12, 'Elevated (10-12h)',
+          If(DutyHours <= 14, 'Near Limit (12-14h)',
+             If(DutyHours <= 16, 'VIOLATION (<16h)',
+                'CRITICAL VIOLATION (>16h)')))) AS DutySeverity,
+
+    If(QualificationMatch = 'No', 'VIOLATION', 'Compliant') AS QualificationStatus,
+    If(IsReassignment = 'Yes', 15000, 0) AS ReassignmentCostINR,
+    Hour(Timestamp(ReportTime, 'YYYY-MM-DD hh:mm')) AS ReportHour,
+
+    If(Hour(Timestamp(ReportTime,'YYYY-MM-DD hh:mm')) >= 6
+        AND Hour(Timestamp(ReportTime,'YYYY-MM-DD hh:mm')) < 14, 'Morning',
+       If(Hour(Timestamp(ReportTime,'YYYY-MM-DD hh:mm')) >= 14
+        AND Hour(Timestamp(ReportTime,'YYYY-MM-DD hh:mm')) < 22, 'Evening',
+        'Night')) AS ShiftType
+
+FROM [lib://CrewProject/crew_assignments.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// ============================================================
+// SECTION 5: REST PERIODS
+// Key fields: CrewID only (link to CrewMaster)
+// Rename: PrevAssignmentID, NextAssignmentID -> prefixed to avoid syn keys
+// Date -> RestDate
+// ============================================================
+
+RestPeriods:
+LOAD
+    CrewID,
+    PrevAssignmentID    AS RestPrevAssignmentID,
+    NextAssignmentID    AS RestNextAssignmentID,
+    Timestamp(PrevReleaseTime, 'YYYY-MM-DD hh:mm') AS PrevReleaseTime,
+    Timestamp(NextReportTime, 'YYYY-MM-DD hh:mm')  AS NextReportTime,
+    Num(RestHours)      AS RestHours,
+    Num(MinRestRequired) AS MinRestRequired,
+    RestViolation,
+    Date(Date#(Date, 'YYYY-MM-DD'), 'YYYY-MM-DD') AS RestDate,
+    If(RestViolation = 'Yes', Round(12 - RestHours, 2), 0) AS RestDeficitHours,
+    If(RestViolation = 'No', 'Compliant',
+       If(RestHours >= 8, 'Minor Violation (8-12h)',
+          If(RestHours >= 4, 'Major Violation (4-8h)',
+             'CRITICAL (<4h)'))) AS RestViolationSeverity
+FROM [lib://CrewProject/rest_periods.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+// ============================================================
+// SECTION 6: MONTHLY HOURS
+// Key field: CrewID only
+// All other fields renamed to avoid collisions
+// ============================================================
+
+MonthlyHours:
+LOAD
+    CrewID,
+    Month(AssignmentDate)                           AS MH_MonthNum,
+    Date(MonthStart(AssignmentDate), 'YYYY-MM')     AS MH_MonthYear,
+    Sum(DutyHours)                                  AS TotalMonthlyDutyHours,
+    Count(AssignmentID)                             AS TotalFlightsInMonth,
+    If(Sum(DutyHours) > 100, 'VIOLATION', 'Compliant') AS MonthlyHourStatus,
+    If(Sum(DutyHours) > 100,
+        Round(Sum(DutyHours) - 100, 2), 0)          AS MonthlyExcessHours
+RESIDENT CrewAssignments
+GROUP BY CrewID, Month(AssignmentDate),
+         Date(MonthStart(AssignmentDate), 'YYYY-MM');
+
+
+// ============================================================
+// SECTION 7: CONSECUTIVE DUTY CHECK
+// Key field: CrewID only
+// ============================================================
+
+TempDutyDates:
+LOAD DISTINCT
+    CrewID,
+    AssignmentDate AS DutyDate
+RESIDENT CrewAssignments;
+
+ConsecutiveDutyCheck:
+LOAD
+    CrewID,
+    DutyDate,
+    1 AS DutyDayFlag
+RESIDENT TempDutyDates;
+
+DROP TABLE TempDutyDates;
+
+
+// ============================================================
+// SECTION 8: VIOLATION SUMMARY
+// Key field: AssignmentID only
+// Drop CrewID and FlightID — accessible via AssignmentID -> CrewAssignments
+// ============================================================
+
+ViolationSummary:
+LOAD
+    AssignmentID,
+    AssignmentDate          AS ViolationDate,
+
+    If(DutyHourStatus = 'VIOLATION'
+        OR QualificationStatus = 'VIOLATION', 1, 0) AS HasViolation,
+
+    If(DutyHourStatus = 'VIOLATION'
+        AND QualificationStatus = 'VIOLATION',
+            'Duty Hours Exceeded; Qualification Mismatch',
+       If(DutyHourStatus = 'VIOLATION',
+            'Duty Hours Exceeded',
+          If(QualificationStatus = 'VIOLATION',
+            'Qualification Mismatch', 'None'))) AS ViolationTypes,
+
+    DutyHourStatus          AS VS_DutyHourStatus,
+    QualificationStatus     AS VS_QualStatus,
+    DutySeverity            AS VS_DutySeverity,
+    DutyExcessHours         AS VS_DutyExcessHours,
+    ReassignmentCostINR     AS VS_ReassignmentCost,
+    IsReassignment          AS VS_IsReassignment
+
+RESIDENT CrewAssignments;
+
+
+// ============================================================
+// SECTION 9: WHAT-IF CANCELLATION IMPACT
+// Key field: AssignmentID only
+// Drop CrewID, FlightID to avoid synthetic keys
+// ============================================================
+
+TempWhatIf:
+LOAD
+    AssignmentID,
+    IsReassignment,
+    If(IsReassignment = 'Yes', 'High Risk', 'Low Risk') AS CancellationRiskLevel
+RESIDENT CrewAssignments;
+
+WhatIfCancellationImpact:
+LOAD
+    AssignmentID,
+    IsReassignment          AS WI_IsReassignment,
+    CancellationRiskLevel,
+    If(CancellationRiskLevel = 'High Risk', 25000, 8000)
+        AS EmergencyRewCrewCostINR
+RESIDENT TempWhatIf;
+
+DROP TABLE TempWhatIf;
+
+
+// ============================================================
+// SECTION 10: CALENDAR
+// Key field: FlightDate (links to Flights only)
+// ============================================================
+
+MinDate:
+LOAD Min(FlightDate) AS MinDate RESIDENT Flights;
+LET vMinDate = Peek('MinDate', 0, 'MinDate');
+DROP TABLE MinDate;
+
+MaxDate:
+LOAD Max(FlightDate) AS MaxDate RESIDENT Flights;
+LET vMaxDate = Peek('MaxDate', 0, 'MaxDate');
+DROP TABLE MaxDate;
+
+Calendar:
+LOAD
+    Date($(vMinDate) + RowNo() - 1) AS FlightDate,
+    Year($(vMinDate) + RowNo() - 1) AS CalYear,
+    Month($(vMinDate) + RowNo() - 1) AS CalMonth,
+    MonthName($(vMinDate) + RowNo() - 1) AS CalMonthYear,
+    Week($(vMinDate) + RowNo() - 1) AS CalWeek,
+    WeekDay($(vMinDate) + RowNo() - 1) AS CalWeekDay,
+    Day($(vMinDate) + RowNo() - 1) AS CalDay,
+    If(WeekDay($(vMinDate) + RowNo() - 1) >= 6,
+        'Weekend', 'Weekday') AS DayType
+AUTOGENERATE ($(vMaxDate) - $(vMinDate) + 1);
+
+
+// ============================================================
+// KPI VARIABLES
+// ============================================================
+
+LET vDGCA_MaxDuty       = 14;
+LET vDGCA_MinRest       = 12;
+LET vDGCA_MaxMonthly    = 100;
+LET vReassignCost       = 15000;
+LET vEmergencyCost      = 25000;
+
