@@ -1,11 +1,4 @@
 # ✈ Airline Crew Scheduling Efficiency Analyzer
-### Advanced Qlik Sense Dashboard | DGCA Compliance | What-If Analysis
-
-![Qlik Sense](https://img.shields.io/badge/Qlik%20Sense-Desktop-009845?style=flat&logo=qlik)
-![Domain](https://img.shields.io/badge/Domain-Aviation%20%7C%20Compliance-003580?style=flat)
-![Data](https://img.shields.io/badge/Data-Synthetic%20%7C%2060%20Days-EF9F27?style=flat)
-![Sheets](https://img.shields.io/badge/Sheets-5%20Dashboards-1D9E75?style=flat)
-
 ---
 
 ## Project Overview
@@ -39,6 +32,8 @@ This dashboard addresses all four problems in a single analytical platform.
 ### Sheet 1 — Overview
 Executive summary of all operations across 60 days.
 
+![Overview](01_overview.png)
+
 **Key objects:**
 - 10 KPIs with conditional coloring (green/amber/red thresholds)
 - Flights by Status bar chart
@@ -66,6 +61,8 @@ Sum(ReassignmentCostINR)
 ### Sheet 2 — DGCA Violations
 Compliance audit sheet — core analytical sheet of the project.
 
+![Violations](02_violations.png)
+
 **Key objects:**
 - Violation heatmap (Pivot Table: CrewName × Date × HasViolation)
 - Duty severity treemap
@@ -81,6 +78,8 @@ If(Sum(HasViolation) > 0, RGB(226,75,74), RGB(241,248,244))
 
 ### Sheet 3 — Crew Detail
 Individual crew drill-down. Select any crew member to filter all charts.
+
+![Crew Detail](03_crew_detail.png)
 
 **Key objects:**
 - Crew name filter pane (associative engine demo)
@@ -98,6 +97,8 @@ RangeAvg(Above(Avg(DutyHours), 0, 7))
 
 ### Sheet 4 — What-If Analysis
 Simulates flight cancellation scenarios using Qlik Alternate States.
+
+![Whatif](04_whatif.png)
 
 **Key objects:**
 - FlightID filter pane (Cancelled alternate state)
@@ -122,6 +123,8 @@ Sum({[Cancelled]} EmergencyRewCrewCostINR) - Sum({$} ReassignmentCostINR)
 
 ### Sheet 5 — Cost Analysis
 Financial impact analysis with advanced chart types.
+
+![Cost Analysis](05_cost_analysis.png)
 
 **Key objects:**
 - Cost vs violations scatter plot (bubble size = total assignments)
